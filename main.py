@@ -12,13 +12,26 @@ from mutagen.mp3 import MP3
 
 app = FastAPI(title="YouTube Web Studio")
 
-# ลบไฟล์ชั่วคราวหลังส่งให้เบราว์เซอร์ดาวน์โหลดเสร็จ
 def cleanup_temp(path: str):
     if os.path.exists(path):
         try:
             os.remove(path)
         except Exception:
             pass
+
+def sanitize_youtube_url(raw_url: str) -> str:
+    """ตัดพารามิเตอร์ list, index และ radio ออกทั้งหมด ให้เหลือเฉพาะตัวคลิปเดี่ยว"""
+    # กรณีเป็น URL รูปแบบ youtu.be/<id>
+    short_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]+)', raw_url)
+    if short_match:
+        return f"https://www.youtube.com/watch?v={short_match.group(1)}"
+    
+    # กรณีเป็น URL รูปแบบ youtube.com/watch?v=<id>
+    watch_match = re.search(r'v=([a-zA-Z0-9_-]+)', raw_url)
+    if watch_match:
+        return f"https://www.youtube.com/watch?v={watch_match.group(1)}"
+        
+    return raw_url
 
 class MP3Request(BaseModel):
     url: str
@@ -31,21 +44,29 @@ class MP3Request(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 def serve_index():
-    """เปิดหน้าแรก index.html อัตโนมัติเมื่อเข้าเว็บ"""
     with open("index.html", "r", encoding="utf-8") as f:
         return f.read()
 
 @app.get("/api/info")
 def get_video_info(url: str):
-    """ดึงข้อมูลพื้นฐานของคลิปสำหรับกรอกอัตโนมัติ"""
+    clean_url = sanitize_youtube_url(url)
     ydl_opts = {
         'quiet': True,
         'skip_download': True,
+        'noplaylist': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web']
+            },
+            'youtubetab': {
+                'skip': ['authcheck']
+            }
+        },
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(clean_url, download=False)
             return {
                 "id": info.get("id"),
                 "title": info.get("title", ""),
@@ -58,7 +79,7 @@ def get_video_info(url: str):
 
 @app.post("/api/download/mp3")
 def download_mp3(req: MP3Request, background_tasks: BackgroundTasks):
-    """ดาวน์โหลดเสียง แปลงเป็น MP3 และฝังแท็ก ID3v2 ตามฟอร์แมต ชื่อเพลง - ศิลปิน.mp3"""
+    clean_url = sanitize_youtube_url(req.url)
     temp_dir = tempfile.mkdtemp()
     
     clean_title = re.sub(r'[\\/*?:"<>|]', "", req.title or "Track").strip()
@@ -70,32 +91,36 @@ def download_mp3(req: MP3Request, background_tasks: BackgroundTasks):
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': os.path.join(temp_dir, 'audio.%(ext)s'),
+        'noplaylist': True,
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
             'preferredquality': '320',
         }],
         'quiet': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web']
+            }
+        },
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([req.url])
+            ydl.download([clean_url])
 
         if not os.path.exists(raw_audio_path):
             raise HTTPException(status_code=500, detail="การแปลงไฟล์เสียงล้มเหลว")
 
         os.rename(raw_audio_path, final_output_path)
 
-        # ฝัง Metadata (ID3v2.3)
         try:
             audio = MP3(final_output_path, ID3=ID3)
         except ID3NoHeaderError:
             audio = MP3(final_output_path)
             audio.add_tags()
 
-        # UTF-8 encoding (encoding=3) รองรับภาษาไทยสมบูรณ์
         if req.title:
             audio.tags.add(TIT2(encoding=3, text=req.title))
         if req.artist:
@@ -139,7 +164,7 @@ def download_mp3(req: MP3Request, background_tasks: BackgroundTasks):
 
 @app.get("/api/download/video")
 def download_video(url: str, quality: str = "720", background_tasks: BackgroundTasks = None):
-    """ดาวน์โหลดวิดีโอ MP4 รวมภาพและเสียง"""
+    clean_url = sanitize_youtube_url(url)
     temp_dir = tempfile.mkdtemp()
     output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
@@ -147,13 +172,19 @@ def download_video(url: str, quality: str = "720", background_tasks: BackgroundT
         'format': f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': output_template,
         'merge_output_format': 'mp4',
+        'noplaylist': True,
         'quiet': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web']
+            }
+        },
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            info = ydl.extract_info(clean_url, download=True)
             video_filename = ydl.prepare_filename(info)
             if not video_filename.endswith(".mp4"):
                 video_filename = os.path.splitext(video_filename)[0] + ".mp4"
