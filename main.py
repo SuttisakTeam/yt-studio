@@ -168,18 +168,15 @@ def download_video(url: str, quality: str = "720", background_tasks: BackgroundT
     temp_dir = tempfile.mkdtemp()
     output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
-    ydl_opts = {
-        'format': f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': output_template,
-        'merge_output_format': 'mp4',
-        'noplaylist': True,
+ ydl_opts = {
         'quiet': True,
+        'skip_download': True,
+        'noplaylist': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web']
+                'player_client': ['ios', 'mweb']  # iOS Client ทนต่อการบล็อก IP บน Cloud ได้ดีที่สุด
             }
-        },
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None
+        }
     }
 
     try:
