@@ -20,13 +20,11 @@ def cleanup_temp(path: str):
             pass
 
 def sanitize_youtube_url(raw_url: str) -> str:
-    """ตัดพารามิเตอร์ list, index และ radio ออกทั้งหมด ให้เหลือเฉพาะตัวคลิปเดี่ยว"""
-    # กรณีเป็น URL รูปแบบ youtu.be/<id>
+    """ตัดพารามิเตอร์ playlist, index และ radio ออก ให้เหลือเฉพาะคลิปเดี่ยว"""
     short_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]+)', raw_url)
     if short_match:
         return f"https://www.youtube.com/watch?v={short_match.group(1)}"
     
-    # กรณีเป็น URL รูปแบบ youtube.com/watch?v=<id>
     watch_match = re.search(r'v=([a-zA-Z0-9_-]+)', raw_url)
     if watch_match:
         return f"https://www.youtube.com/watch?v={watch_match.group(1)}"
@@ -56,14 +54,13 @@ def get_video_info(url: str):
         'noplaylist': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web']
-            },
-            'youtubetab': {
-                'skip': ['authcheck']
+                'player_client': ['ios', 'mweb']
             }
-        },
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None
+        }
     }
+    if os.path.exists('cookies.txt'):
+        ydl_opts['cookiefile'] = 'cookies.txt'
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(clean_url, download=False)
@@ -100,11 +97,12 @@ def download_mp3(req: MP3Request, background_tasks: BackgroundTasks):
         'quiet': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web']
+                'player_client': ['ios', 'mweb']
             }
-        },
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None
+        }
     }
+    if os.path.exists('cookies.txt'):
+        ydl_opts['cookiefile'] = 'cookies.txt'
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -168,16 +166,20 @@ def download_video(url: str, quality: str = "720", background_tasks: BackgroundT
     temp_dir = tempfile.mkdtemp()
     output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
- ydl_opts = {
-        'quiet': True,
-        'skip_download': True,
+    ydl_opts = {
+        'format': f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': output_template,
+        'merge_output_format': 'mp4',
         'noplaylist': True,
+        'quiet': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'mweb']  # iOS Client ทนต่อการบล็อก IP บน Cloud ได้ดีที่สุด
+                'player_client': ['ios', 'mweb']
             }
         }
     }
+    if os.path.exists('cookies.txt'):
+        ydl_opts['cookiefile'] = 'cookies.txt'
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -191,14 +193,3 @@ def download_video(url: str, quality: str = "720", background_tasks: BackgroundT
         headers = {
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}"
         }
-
-        if background_tasks:
-            background_tasks.add_task(cleanup_temp, video_filename)
-
-        return FileResponse(
-            path=video_filename,
-            media_type="video/mp4",
-            headers=headers
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
