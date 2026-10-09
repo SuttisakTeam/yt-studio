@@ -193,3 +193,14 @@ def download_video(url: str, quality: str = "720", background_tasks: BackgroundT
         headers = {
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}"
         }
+
+        if background_tasks:
+            background_tasks.add_task(cleanup_temp, video_filename)
+
+        return FileResponse(
+            path=video_filename,
+            media_type="video/mp4",
+            headers=headers
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
